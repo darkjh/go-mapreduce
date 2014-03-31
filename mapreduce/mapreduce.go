@@ -51,9 +51,10 @@ type KeyValue struct {
 }
 
 type MapReduce struct {
-	nMap              int    // Number of Map jobs
-	nReduce           int    // Number of Reduce jobs
-	file              string // Name of input file, eg `examples/text.txt`
+	job               Job // the job to execute
+	nMap              int
+	nReduce           int
+	file              string
 	MasterAddress     string
 	registerChannel   chan string
 	MapDoneChannel    chan bool
@@ -65,16 +66,14 @@ type MapReduce struct {
 
 	// Map of registered workers that you need to keep up to date
 	Workers map[string]*WorkerInfo
-
-	// add any additional state here
 }
 
-func InitMapReduce(nmap int, nreduce int,
-	file string, master string) *MapReduce {
+func InitMapReduce(job Job, master string) *MapReduce {
 	mr := new(MapReduce)
-	mr.nMap = nmap
-	mr.nReduce = nreduce
-	mr.file = file
+	mr.job = job
+	mr.nMap = job.NMap
+	mr.nReduce = job.NReduce
+	mr.file = job.InputPath
 	mr.MasterAddress = master
 	mr.alive = true
 	mr.registerChannel = make(chan string, 100)
@@ -88,9 +87,8 @@ func InitMapReduce(nmap int, nreduce int,
 	return mr
 }
 
-func MakeMapReduce(nmap int, nreduce int,
-	file string, master string) *MapReduce {
-	mr := InitMapReduce(nmap, nreduce, file, master)
+func MakeMapReduce(job Job, master string) *MapReduce {
+	mr := InitMapReduce(job, master)
 	mr.StartRegistrationServer()
 	go mr.Run()
 	return mr
@@ -363,12 +361,12 @@ func (mr *MapReduce) CleanupFiles() {
 }
 
 // Run jobs sequentially.
-func RunSingle(nMap int, nReduce int, file string,
+func RunSingle(job Job,
 	Map func(string) *list.List,
 	Reduce func(string, *list.List) string) {
-	mr := InitMapReduce(nMap, nReduce, file, "")
+	mr := InitMapReduce(job, "")
 	mr.Split(mr.file)
-	for i := 0; i < nMap; i++ {
+	for i := 0; i < mr.nMap; i++ {
 		DoMap(i, mr.file, mr.nReduce, Map)
 	}
 	for i := 0; i < mr.nReduce; i++ {
