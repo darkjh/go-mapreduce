@@ -2,6 +2,7 @@ package mapreduce
 
 import "fmt"
 import "os"
+import "path"
 import "log"
 import "strconv"
 import "encoding/json"
@@ -52,7 +53,7 @@ type KeyValue struct {
 type MapReduce struct {
 	nMap              int    // Number of Map jobs
 	nReduce           int    // Number of Reduce jobs
-	file              string // Name of input file
+	file              string // Name of input file, eg `examples/text.txt`
 	MasterAddress     string
 	registerChannel   chan string
 	MapDoneChannel    chan bool
@@ -140,14 +141,16 @@ func (mr *MapReduce) StartRegistrationServer() {
 }
 
 // Name of the file that is the input for map job <MapJob>
-func MapName(fileName string, MapJob int) string {
-	return "mrtmp." + fileName + "-" + strconv.Itoa(MapJob)
+func MapName(filePath string, MapJob int) string {
+	dir := path.Dir(filePath)
+	file := path.Base(filePath)
+	return path.Join(dir, "mrtmp."+file+"-"+strconv.Itoa(MapJob))
 }
 
 // Split bytes of input file into nMap splits, but split only on white space
-func (mr *MapReduce) Split(fileName string) {
-	fmt.Printf("Split %s\n", fileName)
-	infile, err := os.Open(fileName)
+func (mr *MapReduce) Split(filePath string) {
+	fmt.Printf("Split %s\n", filePath)
+	infile, err := os.Open(filePath)
 	if err != nil {
 		log.Fatal("Split: ", err)
 	}
@@ -160,7 +163,7 @@ func (mr *MapReduce) Split(fileName string) {
 	nchunk := size / int64(mr.nMap)
 	nchunk += 1
 
-	outfile, err := os.Create(MapName(fileName, 0))
+	outfile, err := os.Create(MapName(filePath, 0))
 	if err != nil {
 		log.Fatal("Split: ", err)
 	}
@@ -173,7 +176,7 @@ func (mr *MapReduce) Split(fileName string) {
 		if int64(i) > nchunk*int64(m) {
 			writer.Flush()
 			outfile.Close()
-			outfile, err = os.Create(MapName(fileName, m))
+			outfile, err = os.Create(MapName(filePath, m))
 			writer = bufio.NewWriter(outfile)
 			m += 1
 		}
@@ -185,8 +188,12 @@ func (mr *MapReduce) Split(fileName string) {
 	outfile.Close()
 }
 
-func ReduceName(fileName string, MapJob int, ReduceJob int) string {
-	return MapName(fileName, MapJob) + "-" + strconv.Itoa(ReduceJob)
+func ReduceName(filePath string, MapJob int, ReduceJob int) string {
+	mapFile := MapName(filePath, MapJob)
+	dir := path.Dir(mapFile)
+	file := path.Base(mapFile)
+
+	return path.Join(dir, file+"-"+strconv.Itoa(ReduceJob))
 }
 
 func hash(s string) uint32 {
@@ -238,7 +245,9 @@ func DoMap(JobNumber int, fileName string,
 }
 
 func MergeName(fileName string, ReduceJob int) string {
-	return "mrtmp." + fileName + "-res-" + strconv.Itoa(ReduceJob)
+	dir := path.Dir(fileName)
+	file := path.Base(fileName)
+	return path.Join(dir, "mrtmp."+file+"-res-"+strconv.Itoa(ReduceJob))
 }
 
 // Read map outputs for partition job, sort them by key, call reduce for each
@@ -286,6 +295,12 @@ func DoReduce(job int, fileName string, nmap int,
 	file.Close()
 }
 
+func ResultName(filePath string) string {
+	dir := path.Dir(filePath)
+	file := path.Base(filePath)
+	return path.Join(dir, "mrtmp."+file)
+}
+
 // Merge the results of the reduce jobs
 // XXX use merge sort
 func (mr *MapReduce) Merge() {
@@ -315,7 +330,7 @@ func (mr *MapReduce) Merge() {
 	}
 	sort.Strings(keys)
 
-	file, err := os.Create("mrtmp." + mr.file)
+	file, err := os.Create(ResultName(mr.file))
 	if err != nil {
 		log.Fatal("Merge: create ", err)
 	}

@@ -1,7 +1,6 @@
 package mapreduce
 
 import "fmt"
-import "os"
 import "log"
 import "net/rpc"
 import "net"

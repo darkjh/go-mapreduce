@@ -2,7 +2,7 @@ package main
 
 import "os"
 import "fmt"
-import "./mapreduce"
+import "github.com/darkjh/go-mapreduce/mapreduce"
 import "container/list"
 import "strings"
 import "strconv"
