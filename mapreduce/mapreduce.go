@@ -8,12 +8,8 @@ import "strconv"
 import "encoding/json"
 import "sort"
 import "container/list"
-import "net/rpc"
-import "net"
 import "bufio"
 import "hash/fnv"
-
-// import "os/exec"
 
 // A simple mapreduce library with a sequential implementation.
 //
@@ -51,21 +47,10 @@ type KeyValue struct {
 }
 
 type MapReduce struct {
-	job               Job // the job to execute
-	nMap              int
-	nReduce           int
-	file              string
-	MasterAddress     string
-	registerChannel   chan string
-	MapDoneChannel    chan bool
-	ReduceDoneChannel chan bool
-	DoneChannel       chan bool
-	alive             bool
-	l                 net.Listener
-	stats             *list.List
-
-	// Map of registered workers that you need to keep up to date
-	Workers map[string]*WorkerInfo
+	job     Job // the job to execute
+	nMap    int
+	nReduce int
+	file    string
 }
 
 func InitMapReduce(job Job, master string) *MapReduce {
@@ -74,68 +59,8 @@ func InitMapReduce(job Job, master string) *MapReduce {
 	mr.nMap = job.NMap
 	mr.nReduce = job.NReduce
 	mr.file = job.InputPath
-	mr.MasterAddress = master
-	mr.alive = true
-	mr.registerChannel = make(chan string, 100)
-	mr.MapDoneChannel = make(chan bool, mr.nMap)
-	mr.ReduceDoneChannel = make(chan bool, mr.nReduce)
-	mr.DoneChannel = make(chan bool)
-
-	// init workers info
-	mr.Workers = make(map[string]*WorkerInfo)
 
 	return mr
-}
-
-func MakeMapReduce(job Job, master string) *MapReduce {
-	mr := InitMapReduce(job, master)
-	mr.StartRegistrationServer()
-	go mr.Run()
-	return mr
-}
-
-func (mr *MapReduce) Register(args *RegisterArgs, res *RegisterReply) error {
-	DPrintf("Register: worker %s\n", args.Worker)
-	worker := args.Worker
-	mr.registerChannel <- worker
-	mr.Workers[worker] = &WorkerInfo{address: worker}
-	res.OK = true
-	return nil
-}
-
-func (mr *MapReduce) Shutdown(args *ShutdownArgs, res *ShutdownReply) error {
-	DPrintf("Shutdown: registration server\n")
-	mr.alive = false
-	mr.l.Close() // causes the Accept to fail
-	return nil
-}
-
-func (mr *MapReduce) StartRegistrationServer() {
-	rpcs := rpc.NewServer()
-	rpcs.Register(mr)
-	l, e := net.Listen("tcp", mr.MasterAddress)
-	if e != nil {
-		log.Fatal("RegstrationServer", mr.MasterAddress, " error: ", e)
-	}
-	mr.l = l
-
-	// now that we are listening on the master address, can fork off
-	// accepting connections to another thread.
-	go func() {
-		for mr.alive {
-			conn, err := mr.l.Accept()
-			if err == nil {
-				go func() {
-					rpcs.ServeConn(conn)
-					conn.Close()
-				}()
-			} else {
-				DPrintf("RegistrationServer: accept error", err)
-				break
-			}
-		}
-		DPrintf("RegistrationServer: done\n")
-	}()
 }
 
 // Name of the file that is the input for map job <MapJob>
@@ -373,28 +298,4 @@ func RunSingle(job Job,
 		DoReduce(i, mr.file, mr.nMap, Reduce)
 	}
 	mr.Merge()
-}
-
-func (mr *MapReduce) CleanupRegistration() {
-	args := &ShutdownArgs{}
-	var reply ShutdownReply
-	ok := call(mr.MasterAddress, "MapReduce.Shutdown", args, &reply)
-	if ok == false {
-		fmt.Printf("Cleanup: RPC %s error\n", mr.MasterAddress)
-	}
-	DPrintf("CleanupRegistration: done\n")
-}
-
-// Run jobs in parallel, assuming a shared file system
-func (mr *MapReduce) Run() {
-	fmt.Printf("Run mapreduce job %s %s\n", mr.MasterAddress, mr.file)
-
-	mr.Split(mr.file)
-	mr.stats = mr.RunMaster()
-	mr.Merge()
-	mr.CleanupRegistration()
-
-	fmt.Printf("%s: MapReduce done\n", mr.MasterAddress)
-
-	mr.DoneChannel <- true
 }
