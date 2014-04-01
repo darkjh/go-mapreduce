@@ -1,18 +1,97 @@
 package mapreduce
 
 import "container/list"
+import "net/rpc"
+import "net"
 import "fmt"
+import "log"
 
 type WorkerInfo struct {
 	address string
-	// You can add definitions here.
+}
+
+type Master struct {
+	Address string // eg. `localhost:7777`
+	// TODO these should be specific about a job, need JobContext
+	registerChannel   chan string
+	mapDoneChannel    chan bool
+	reduceDoneChannel chan bool
+	AllDoneChannel    chan bool
+	submitChannel     chan bool
+	l                 net.Listener
+	alive             bool
+	stats             *list.List
+	job               Job                    // job to execute
+	Workers           map[string]*WorkerInfo // worker state
+}
+
+func (m *Master) Register(args *RegisterArgs, res *RegisterReply) error {
+	DPrintf("Register: worker %s\n", args.Worker)
+	worker := args.Worker
+	m.registerChannel <- worker
+	m.Workers[worker] = &WorkerInfo{address: worker}
+	res.OK = true
+	return nil
+}
+
+func (m *Master) Shutdown(args *ShutdownArgs, res *ShutdownReply) error {
+	DPrintf("Shutdown: registration server\n")
+	m.alive = false
+	m.l.Close() // causes the Accept to fail
+	return nil
+}
+
+func (m *Master) SubmitJob(args *SubmitArgs, res *SubmitReply) error {
+	DPrintf("Submit")
+	m.job = args.Job
+	res.OK = true
+	m.submitChannel <- true
+	return nil
+}
+
+func (m *Master) StartRPCServer() {
+	rpcs := rpc.NewServer()
+	rpcs.Register(m)
+	l, e := net.Listen("tcp", m.Address)
+	if e != nil {
+		log.Fatal("RPCServer", m.Address, " error: ", e)
+	}
+	m.l = l
+
+	// now that we are listening on the master address, can fork off
+	// accepting connections to another thread.
+	go func() {
+		for m.alive {
+			conn, err := m.l.Accept()
+			if err == nil {
+				go func() {
+					rpcs.ServeConn(conn)
+					conn.Close()
+				}()
+			} else {
+				DPrintf("RPCServer: accept error", err)
+				break
+			}
+		}
+		DPrintf("RPCServer: done\n")
+	}()
+}
+
+func (m *Master) CleanupRegistration() {
+	args := &ShutdownArgs{}
+	var reply ShutdownReply
+	ok := call(m.Address, "Master.Shutdown", args, &reply)
+	if ok == false {
+		fmt.Printf("Cleanup: RPC %s error\n", m.Address)
+	}
+	DPrintf("CleanupRegistration: done\n")
 }
 
 // Clean up all workers by sending a Shutdown RPC to each one of them Collect
-// the number of jobs each work has performed.
-func (mr *MapReduce) KillWorkers() *list.List {
+// the number of jobs each worker has performed.
+func (m *Master) KillWorkers() *list.List {
 	l := list.New()
-	for _, w := range mr.Workers {
+	for _, w := range m.Workers {
 		DPrintf("DoWork: shutdown %s\n", w.address)
 		args := &ShutdownArgs{}
 		var reply ShutdownReply
@@ -26,45 +105,93 @@ func (mr *MapReduce) KillWorkers() *list.List {
 	return l
 }
 
-func (mr *MapReduce) CallMap(worker string, jobNum int) {
-	jobArgs := DoJobArgs{File: mr.file, Operation: Map,
-		JobNumber: jobNum, NumOtherPhase: mr.nReduce}
+func (m *Master) CallMap(worker string, jobNum int) {
+	jobArgs := DoJobArgs{File: m.job.InputPath, Operation: Map,
+		JobNumber: jobNum, NumOtherPhase: m.job.NReduce}
 	reply := new(DoJobReply)
 	call(worker, "Worker.DoJob", jobArgs, &reply)
-	mr.MapDoneChannel <- true
-
+	m.mapDoneChannel <- true
 }
 
-func (mr *MapReduce) CallReduce(worker string, jobNum int) {
-	jobArgs := DoJobArgs{File: mr.file, Operation: Reduce,
-		JobNumber: jobNum, NumOtherPhase: mr.nMap}
+func (m *Master) CallReduce(worker string, jobNum int) {
+	jobArgs := DoJobArgs{File: m.job.InputPath, Operation: Reduce,
+		JobNumber: jobNum, NumOtherPhase: m.job.NMap}
 	reply := new(DoJobReply)
 	call(worker, "Worker.DoJob", jobArgs, &reply)
-	mr.ReduceDoneChannel <- true
+	m.reduceDoneChannel <- true
 }
 
-func (mr *MapReduce) RunMaster() *list.List {
+// TODO modify this
+func (m *Master) RunJob() *list.List {
 	// run maps
-	for i := 0; i < mr.nMap; i++ {
-		worker := <-mr.registerChannel
-		go mr.CallMap(worker, i)
+	nMap := m.job.NMap
+	nReduce := m.job.NReduce
+	for i := 0; i < nMap; i++ {
+		worker := <-m.registerChannel
+		go m.CallMap(worker, i)
 	}
 	// wait for all maps to complet
-	for i := 0; i < mr.nMap; i++ {
-		<-mr.MapDoneChannel
+	for i := 0; i < nMap; i++ {
+		<-m.mapDoneChannel
 	}
 	fmt.Println("Maps finished ...")
 
 	// run reduces
-	for i := 0; i < mr.nReduce; i++ {
-		worker := <-mr.registerChannel
+	for i := 0; i < nReduce; i++ {
+		worker := <-m.registerChannel
 		fmt.Println(worker)
-		go mr.CallReduce(worker, i)
+		go m.CallReduce(worker, i)
 	}
-	for i := 0; i < mr.nReduce; i++ {
-		<-mr.ReduceDoneChannel
+	for i := 0; i < nReduce; i++ {
+		<-m.reduceDoneChannel
 	}
 
 	fmt.Println("Reduces finished ...")
-	return mr.KillWorkers()
+	return nil
+}
+
+func (m *Master) Run() {
+	// wait for job
+	fmt.Println("Waiting for job ...")
+	<-m.submitChannel
+	input := m.job.InputPath
+	fmt.Printf("Run mapreduce job %s %s\n",
+		m.Address, input)
+
+	// prepare splits
+	mr := InitMapReduce(m.job)
+	mr.Split(input)
+	m.RunJob()
+	mr.Merge()
+	m.CleanupRegistration()
+
+	fmt.Printf("%s: MapReduce done\n", m.Address)
+
+	m.AllDoneChannel <- true
+}
+
+func InitMaster(address string) *Master {
+	m := new(Master)
+	m.Address = address
+	m.alive = true
+	// TODO better way for this channeling
+	m.registerChannel = make(chan string, 100)
+	m.mapDoneChannel = make(chan bool, 100)
+	m.reduceDoneChannel = make(chan bool, 100)
+	m.AllDoneChannel = make(chan bool)
+	m.submitChannel = make(chan bool)
+
+	// init workers info
+	m.Workers = make(map[string]*WorkerInfo)
+
+	return m
+
+}
+
+// Init and run the master process
+func RunMaster(address string) *Master {
+	m := InitMaster(address)
+	m.StartRPCServer()
+	m.Run()
+	return m
 }

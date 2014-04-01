@@ -46,6 +46,8 @@ type KeyValue struct {
 	Value string
 }
 
+// TODO no need for a MapReduce struct
+// can be just a bunch of functions
 type MapReduce struct {
 	job     Job // the job to execute
 	nMap    int
@@ -53,7 +55,7 @@ type MapReduce struct {
 	file    string
 }
 
-func InitMapReduce(job Job, master string) *MapReduce {
+func InitMapReduce(job Job) *MapReduce {
 	mr := new(MapReduce)
 	mr.job = job
 	mr.nMap = job.NMap
@@ -289,7 +291,7 @@ func (mr *MapReduce) CleanupFiles() {
 func RunSingle(job Job,
 	Map func(string) *list.List,
 	Reduce func(string, *list.List) string) {
-	mr := InitMapReduce(job, "")
+	mr := InitMapReduce(job)
 	mr.Split(mr.file)
 	for i := 0; i < mr.nMap; i++ {
 		DoMap(i, mr.file, mr.nReduce, Map)

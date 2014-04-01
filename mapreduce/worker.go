@@ -7,7 +7,8 @@ import "net"
 import "container/list"
 
 // Worker is a server waiting for DoJob or Shutdown RPCs
-
+// TODO separate worker with map, reduce func
+// they should be passed as a part of job
 type Worker struct {
 	name   string
 	Reduce func(string, *list.List) string
@@ -55,7 +56,7 @@ func Register(master string, me string) {
 	args.Worker = me
 	var reply RegisterReply
 	fmt.Printf("%s registering to %s\n", me, master)
-	ok := call(master, "MapReduce.Register", args, &reply)
+	ok := call(master, "Master.Register", args, &reply)
 	if ok == false {
 		fmt.Printf("Register: RPC %s register error\n", master)
 	}
