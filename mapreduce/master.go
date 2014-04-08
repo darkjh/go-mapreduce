@@ -5,6 +5,8 @@ import "net/rpc"
 import "net"
 import "fmt"
 import "log"
+import "os"
+import "os/signal"
 
 type WorkerInfo struct {
 	address string
@@ -16,7 +18,6 @@ type Master struct {
 	registerChannel   chan string
 	mapDoneChannel    chan bool
 	reduceDoneChannel chan bool
-	AllDoneChannel    chan bool
 	submitChannel     chan bool
 	l                 net.Listener
 	alive             bool
@@ -36,8 +37,10 @@ func (m *Master) Register(args *RegisterArgs, res *RegisterReply) error {
 
 func (m *Master) Shutdown(args *ShutdownArgs, res *ShutdownReply) error {
 	DPrintf("Shutdown: registration server\n")
+	defer os.Exit(0)
 	m.alive = false
 	m.l.Close() // causes the Accept to fail
+	m.KillWorkers()
 	return nil
 }
 
@@ -154,6 +157,8 @@ func (m *Master) Run() {
 	// wait for job
 	fmt.Println("Waiting for job ...")
 	<-m.submitChannel
+
+	// start doing MR
 	input := m.job.InputPath
 	fmt.Printf("Run mapreduce job %s %s\n",
 		m.Address, input)
@@ -163,11 +168,9 @@ func (m *Master) Run() {
 	mr.Split(input)
 	m.RunJob()
 	mr.Merge()
-	m.CleanupRegistration()
 
+	// notify when job finishes
 	fmt.Printf("%s: MapReduce done\n", m.Address)
-
-	m.AllDoneChannel <- true
 }
 
 func InitMaster(address string) *Master {
@@ -178,20 +181,35 @@ func InitMaster(address string) *Master {
 	m.registerChannel = make(chan string, 100)
 	m.mapDoneChannel = make(chan bool, 100)
 	m.reduceDoneChannel = make(chan bool, 100)
-	m.AllDoneChannel = make(chan bool)
 	m.submitChannel = make(chan bool)
 
 	// init workers info
 	m.Workers = make(map[string]*WorkerInfo)
 
 	return m
+}
 
+// trap interrupt signal to do some cleanup then exit
+func (m *Master) ListenOnExit() {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+	go func() {
+		for sig := range c {
+			log.Printf("captured %v, exiting..", sig)
+			// stop workers
+			m.KillWorkers()
+			os.Exit(1)
+		}
+	}()
 }
 
 // Init and run the master process
-func RunMaster(address string) *Master {
+func RunMasterProcess(address string) {
 	m := InitMaster(address)
 	m.StartRPCServer()
-	m.Run()
-	return m
+	m.ListenOnExit()
+	// long-running master process
+	for true {
+		m.Run()
+	}
 }

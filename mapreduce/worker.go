@@ -5,6 +5,7 @@ import "log"
 import "net/rpc"
 import "net"
 import "container/list"
+import "os"
 
 // Worker is a server waiting for DoJob or Shutdown RPCs
 // TODO separate worker with map, reduce func
@@ -42,7 +43,8 @@ func (wk *Worker) DoJob(arg *DoJobArgs, res *DoJobReply) error {
 // The master is telling us to shutdown. Report the number of Jobs we
 // have processed.
 func (wk *Worker) Shutdown(args *ShutdownArgs, res *ShutdownReply) error {
-	DPrintf("Shutdown %s\n", wk.name)
+	log.Println("Shutting down worker ...")
+	defer os.Exit(0)
 	res.Njobs = wk.nJobs
 	res.OK = true
 	wk.nRPC = 1 // OK, because the same thread reads nRPC
@@ -50,7 +52,7 @@ func (wk *Worker) Shutdown(args *ShutdownArgs, res *ShutdownReply) error {
 	return nil
 }
 
-// Tell the master we exist and ready to work
+// Tell the master that it's ready to work
 func Register(master string, me string) {
 	args := &RegisterArgs{}
 	args.Worker = me
@@ -64,7 +66,7 @@ func Register(master string, me string) {
 
 // Set up a connection with the master, register with the master,
 // and wait for jobs from the master
-func RunWorker(MasterAddress string, me string,
+func RunWorkerProcess(MasterAddress string, me string,
 	MapFunc func(string) *list.List,
 	ReduceFunc func(string, *list.List) string, nRPC int) {
 	DPrintf("RunWorker %s\n", me)
@@ -83,7 +85,7 @@ func RunWorker(MasterAddress string, me string,
 	wk.l = l
 	Register(MasterAddress, me)
 
-	// DON'T MODIFY CODE BELOW
+	// For test purpose
 	for wk.nRPC != 0 {
 		conn, err := wk.l.Accept()
 		if err == nil {

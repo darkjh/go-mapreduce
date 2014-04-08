@@ -42,6 +42,7 @@ func Reduce(key string, values *list.List) string {
 // 2) Master (e.g., go run wc.go master localhost:7777)
 // 3) Worker (e.g., go run wc.go worker localhost:7777 localhost:7778)
 // 4) Submit (e.g., go run wc.go submit x.txt localhost:7777)
+// 5) Terminate (e.g., go run wc.go terminate localhost:7777)
 func main() {
 	if len(os.Args) < 3 {
 		fmt.Printf("%s: see usage comments in file\n", os.Args[0])
@@ -52,16 +53,18 @@ func main() {
 	case "sequential":
 		job := mapreduce.Job{NMap: 5, NReduce: 3,
 			InputPath: os.Args[2]}
-		mapreduce.RunSingle(job, Map, Reduce)
+		mapreduce.RunSequential(job, Map, Reduce)
 	case "master":
-		m := mapreduce.RunMaster(os.Args[2])
-		// Wait until MR is done
-		<-m.AllDoneChannel
+		// launch a long-running master process
+		mapreduce.RunMasterProcess(os.Args[2])
 	case "worker":
-		mapreduce.RunWorker(os.Args[2], os.Args[3], Map, Reduce, -1)
+		// launch a long-running worker process
+		mapreduce.RunWorkerProcess(os.Args[2], os.Args[3],
+			Map, Reduce, -1)
 	case "submit":
 		job := mapreduce.Job{NMap: 2, NReduce: 1,
 			InputPath: os.Args[2]}
+		// submit the job to master
 		mapreduce.SubmitJob(job, os.Args[3])
 	}
 }

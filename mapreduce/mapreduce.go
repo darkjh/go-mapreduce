@@ -11,7 +11,7 @@ import "container/list"
 import "bufio"
 import "hash/fnv"
 
-// A simple mapreduce library with a sequential implementation.
+// A naive mapreduce library implementation
 //
 // The application provides an input file f, a Map and Reduce function,
 // and the number of nMap and nReduce tasks.
@@ -46,8 +46,6 @@ type KeyValue struct {
 	Value string
 }
 
-// TODO no need for a MapReduce struct
-// can be just a bunch of functions
 type MapReduce struct {
 	job     Job // the job to execute
 	nMap    int
@@ -261,7 +259,7 @@ func (mr *MapReduce) Merge() {
 	}
 	w := bufio.NewWriter(file)
 	for _, k := range keys {
-		fmt.Fprintf(w, "%s: %s\n", k, kvs[k])
+		fmt.Fprintf(w, "%s\t%s\n", k, kvs[k])
 	}
 	w.Flush()
 	file.Close()
@@ -288,7 +286,7 @@ func (mr *MapReduce) CleanupFiles() {
 }
 
 // Run jobs sequentially.
-func RunSingle(job Job,
+func RunSequential(job Job,
 	Map func(string) *list.List,
 	Reduce func(string, *list.List) string) {
 	mr := InitMapReduce(job)
